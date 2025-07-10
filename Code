@@ -1,0 +1,49 @@
+library(nhanesA)
+library(tidyverse)
+library(MatchIt)
+library(cobalt)
+library(ggdag)
+
+smq  <- nhanes('SMQ_J') %>% select(SEQN, SMQ020, SMQ040)   # Smoking status
+mcq  <- nhanes('MCQ_J') %>% select(SEQN, MCQ160E)          # CVD status
+demo <- nhanes('DEMO_J') %>% select(SEQN, RIDAGEYR, RIAGENDR, BMXBMI)  # Age, sex, BMI
+
+df <- smq %>%
+  inner_join(mcq, by = "SEQN") %>%
+  inner_join(demo, by = "SEQN") %>%
+  filter(!is.na(SMQ020), !is.na(MCQ160E), !is.na(SMQ040)) %>%
+  mutate(
+    smoke = factor(ifelse(SMQ040 == 1, "current", "never/former")),
+    CVD   = factor(ifelse(MCQ160E == 1, "yes", "no")),
+    age   = RIDAGEYR,
+    bmi   = BMXBMI,
+    sex   = factor(RIAGENDR, labels = c("Male", "Female"))
+  )
+
+psm <- matchit(smoke ~ age + sex + bmi, data = df, method = "nearest")
+matched <- match.data(psm)
+
+matched %>%
+  mutate(age_group = cut(age, breaks = seq(20, 80, by = 10), right = FALSE)) %>%
+  group_by(age_group, smoke) %>%
+  summarise(
+    cvd_rate = mean(as.numeric(CVD) - 1),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = age_group, y = cvd_rate, fill = smoke)) +
+    geom_col(position = position_dodge(width = 0.9), width = 0.8) +
+    geom_text(
+      aes(label = paste0(round(cvd_rate * 100, 1), "%")),
+      position = position_dodge(width = 0.9),
+      vjust = -0.5,
+      size = 4
+    ) +
+    scale_fill_brewer(palette = "Set2") +
+    labs(
+      title = "CVD Rate by Age Group & Smoking Status (Matched Sample)",
+      x = "Age Group", y = "Proportion with Cardiovascular Disease",
+      fill = "Smoking Status"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    ylim(0, 1)
